@@ -4,6 +4,7 @@ import (
 	"hash/fnv"
 	"inMemoryAggregation/internal/middleware"
 	"inMemoryAggregation/internal/models"
+	"inMemoryAggregation/internal/repository"
 	"sync"
 	"time"
 )
@@ -14,11 +15,13 @@ type Aggregator struct {
 	shards    [NumShards]*Shard
 	counter   int64
 	counterMu sync.Mutex
+	repo      *repository.Repository
 	logger    middleware.Logger
 }
 
-func NewAggregator(logger middleware.Logger) *Aggregator {
+func NewAggregator(repo *repository.Repository, logger middleware.Logger) *Aggregator {
 	aggr := &Aggregator{
+		repo:   repo,
 		logger: logger,
 	}
 
@@ -69,17 +72,52 @@ func (a *Aggregator) Add(req models.SignalRequest) error {
 	// Trigger count-based flush
 	if shouldFlush {
 		a.logger.Log("msg", "count-based flush triggered", "count", a.counter)
-		// return a.Flush()
+		return a.Flush()
 	}
 
 	return nil
 }
 
-// total size across all shards
-func (a *Aggregator) GetSize() int {
-	total := 0
+// writes all shards' data to database and cleans them
+func (a *Aggregator) Flush() error {
+	batch := []models.AggregateRow{}
+
+	// get data from all shards
 	for i := 0; i < NumShards; i++ {
-		total += a.shards[i].Size()
+		shard := a.shards[i]
+		data := shard.GetAll()
+
+		for key, metrics := range data {
+			batch = append(batch, models.AggregateRow{
+				Date:         key.Date,
+				App:          key.App,
+				Country:      key.Country,
+				AdRequest:    metrics.AdRequest,
+				AdResponse:   metrics.AdResponse,
+				AdImpression: metrics.AdImpression,
+				AdClicks:     metrics.AdClicks,
+				DAU:          int64(len(metrics.UniqueUsers)),
+			})
+		}
 	}
-	return total
+
+	if len(batch) == 0 {
+		return nil
+	}
+
+	if err := a.repo.BatchInsert(batch); err != nil {
+		a.logger.Log("msg", "flush failed", "error", err)
+		return err
+	}
+
+	for i := 0; i < NumShards; i++ {
+		a.shards[i].Clear()
+	}
+
+	a.counterMu.Lock()
+	a.counter = 0
+	a.counterMu.Unlock()
+
+	a.logger.Log("msg", "flushed to database", "records", len(batch))
+	return nil
 }
