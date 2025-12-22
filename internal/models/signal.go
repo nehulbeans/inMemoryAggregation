@@ -21,3 +21,14 @@ type Metrics struct {
 	DAU          int64
 	UniqueUsers  map[string]struct{}
 }
+
+type AggregateRow struct {
+	Date         string
+	App          string
+	Country      string
+	AdRequest    int64
+	AdResponse   int64
+	AdImpression int64
+	AdClicks     int64
+	DAU          int64
+}
