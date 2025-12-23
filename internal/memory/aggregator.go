@@ -121,3 +121,12 @@ func (a *Aggregator) Flush() error {
 	a.logger.Log("msg", "flushed to database", "records", len(batch))
 	return nil
 }
+
+// total size across all shards
+func (a *Aggregator) GetSize() int {
+	total := 0
+	for i := 0; i < NumShards; i++ {
+		total += a.shards[i].Size()
+	}
+	return total
+}
